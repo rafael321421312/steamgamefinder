@@ -1,0 +1,44 @@
+🏗️ ЧАСТЬ 2. Архитектурная документация
+1. Общая архитектура
+Приложение построено по монолитной компонентной архитектуре с элементами паттерна *MVC (Model-View-Controller)*, где:
+*View (Вид): Генерация и обновление виджетов Tkinter (`setup_ui`, `apply_theme`).
+*Controller (Контроллер):** Обработка событий UI, запуск фоновых потоков (`search_game`, `on_game_select`).
+*Model (Модель): Работа с данными, API, кэшем и файловой системой (`get_real_price`, `load_cache`).
+
+*Примечание: Вся логика инкапсулирована в одном главном модуле (файле) `main.py`, что делает приложение портативным (Single-file application).*
+
+2. Структура модулей и библиотек
+* GUI:`tkinter`, `tkinter.ttk`, `tkinter.scrolledtext`, `tkinter.messagebox`.
+* Сеть и парсинг: `requests`, `re` (регулярные выражения).
+* Многопоточность: `threading` (для неблокирующих запросов к API).
+* Хранение данных: `json`, `pickle`, `os`.
+* Системные: `webbrowser`, `datetime`, `time`.
+
+3. Классы, объекты и поля
+В приложении используется один основной класс: `SteamGameFinder`.
+
+Основные поля (атрибуты) объекта:
+* UI и настройки: `root` (главное окно), `themes` (словарь тем), `current_theme`, `status_var` (строка статуса).
+* Данные и кэш: `price_cache` (словарь кэшированных цен), `favorites` (список избранных игр), `current_results` (текущий список поиска).
+* Состояние: `selected_appid` (ID выбранной игры), `current_tab` (активная вкладка).
+* Виджеты: `search_entry`, `results_listbox`, `info_text`, `genre_combo` и др.
+
+4. Функциональное разбиение (Методы класса)
+Всего в классе около 40 методов, которые можно разделить на группы:
+1.Инициализация и UI: `__init__`, `setup_ui`, `create_header`, `create_search_panel`, `create_left_panel`, `create_right_panel`, `apply_theme`, `_apply_theme_to_widget`.
+2.Сетевое взаимодействие и API: `perform_real_search`, `search_via_steam_search`, `search_in_popular_games`, `get_real_price`, `get_full_game_data`, `get_game_genres`.
+3.Работа с данными и кэшем: `load_cache`, `save_cache`, `load_favorites`, `save_favorites`, `update_favorite_prices`.
+4.Обработчики событий (Event Handlers): `on_game_select`, `on_genre_filter`, `on_theme_select`, `apply_sorting`, `apply_filtering`.
+5.Отображение (Рендеринг): `display_real_results`, `display_game_info`, `display_price_history`, `display_specifications`, `display_favorites`.
+
+5. Взаимодействие с внешней средой
+* Steam Store API: HTTP GET запросы к `https://store.steampowered.com/api/appdetails` и `/search/suggest`.
+* Веб-скрапинг: Парсинг HTML-кода страницы поиска Steam с помощью RegEx.
+* Файловая система ОС: Чтение/запись файлов `settings.json`, `favorites.json`, `steam_cache.pkl` в директорию запуска скрипта.
+* Браузер по умолчанию: Вызов `webbrowser.open()` для перехода по внешним ссылкам.
+
+6. Ограничения и системные требования
+* ОС: Ориентировано на **Windows 10/11** (из-за специфики шрифтов и путей Tkinter), но кроссплатформенно (Linux/macOS).
+* Сеть: Требуется постоянное подключение к интернету.
+* Rate Limiting: Steam API может блокировать при слишком частых запросах. В коде это частично решено кэшированием цен на 1 час.
+* Безопасность: Использование `pickle` для кэша потенциально небезопасно, если файл `steam_cache.pkl` будет подменен злоумышленником (так как pickle выполняет произвольный код при распаковке).
