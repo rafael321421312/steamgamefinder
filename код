@@ -1,0 +1,1151 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox
+import threading
+import requests
+import json
+import pickle
+import os
+import time
+import re
+import webbrowser
+from datetime import datetime
+
+class SteamGameFinder:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Steam Game Finder - Поиск игр со скидками")
+        self.root.geometry("1300x950")
+        self.root.configure(bg="#1a1a2e")
+        self.root.minsize(1000, 700)
+
+        self.themes = {
+            "dark": {"bg": "#1a1a2e", "fg": "#ffffff", "accent": "#e94560", "secondary": "#0f3460", "input_bg": "#0f3460", "list_bg": "#0f3460", "text_bg": "#0f3460", "description": "🌙 Тёмная"},
+            "light": {"bg": "#f5f5f5", "fg": "#333333", "accent": "#2196f3", "secondary": "#e0e0e0", "input_bg": "#ffffff", "list_bg": "#ffffff", "text_bg": "#ffffff", "description": "☀️ Светлая"},
+            "cyber": {"bg": "#000000", "fg": "#00ff00", "accent": "#ff00ff", "secondary": "#001a00", "input_bg": "#001a00", "list_bg": "#001a00", "text_bg": "#001a00", "description": "💚 Киберпанк"},
+            "ocean": {"bg": "#0a2f44", "fg": "#e0f7fa", "accent": "#00bcd4", "secondary": "#1a4a6e", "input_bg": "#1a4a6e", "list_bg": "#1a4a6e", "text_bg": "#1a4a6e", "description": "🌊 Океан"},
+            "sunset": {"bg": "#2d1b4e", "fg": "#ffd700", "accent": "#ff6b6b", "secondary": "#4a2c6e", "input_bg": "#4a2c6e", "list_bg": "#4a2c6e", "text_bg": "#4a2c6e", "description": "🌅 Закат"},
+            "forest": {"bg": "#1a3320", "fg": "#a8e6cf", "accent": "#4caf50", "secondary": "#2d5a3f", "input_bg": "#2d5a3f", "list_bg": "#2d5a3f", "text_bg": "#2d5a3f", "description": "🌲 Лес"}}
+
+        self.settings_file = "settings.json"
+        self.current_theme = "dark"
+        self.load_settings()
+
+        self.cache_file = "steam_cache.pkl"
+        self.price_cache = self.load_cache()
+
+        self.favorites_file = "favorites.json"
+        self.favorites = self.load_favorites()
+
+        self.current_results = []
+        self.original_results = []
+        self.filtered_results = []
+        self.selected_appid = None
+        self.current_full_info = None
+        self.current_price_history = None
+        self.current_game_name = None
+        self.current_tab = "info"
+
+        self.sort_by = tk.StringVar(value="relevance")
+
+        self.selected_genres = set()
+        self.genre_filter_var = tk.StringVar(value="Все жанры")
+
+        self.available_genres = set()
+
+        self.center_window()
+        self.setup_ui()
+        self.setup_hotkeys()
+
+        self.status_var.set("✅ Готов к работе! Введите название игры для поиска.")
+
+    def load_settings(self):
+        self.current_theme = "dark"
+        if os.path.exists(self.settings_file):
+            try:
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    saved_theme = settings.get('theme', 'dark')
+                    if saved_theme in self.themes:
+                        self.current_theme = saved_theme
+                    else:
+                        self.current_theme = "dark"
+            except:
+                pass
+
+    def save_settings(self):
+        try:
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump({'theme': self.current_theme}, f)
+        except:
+            pass
+
+    def apply_theme(self, theme_name=None):
+        if theme_name and theme_name in self.themes:
+            self.current_theme = theme_name
+            self.save_settings()
+        elif theme_name and theme_name not in self.themes:
+            self.current_theme = "dark"
+            self.save_settings()
+        if self.current_theme not in self.themes:
+            self.current_theme = "dark"
+
+        theme = self.themes[self.current_theme]
+
+        self.root.configure(bg=theme["bg"])
+
+        for widget in self.root.winfo_children():
+            self._apply_theme_to_widget(widget, theme)
+
+        style = ttk.Style()
+        style.configure("TFrame", background=theme["bg"])
+        style.configure("TLabel", background=theme["bg"], foreground=theme["fg"])
+        style.configure("TButton", background=theme["secondary"], foreground=theme["fg"])
+        style.configure("TCombobox", fieldbackground=theme["input_bg"], foreground=theme["fg"])
+
+    def _apply_theme_to_widget(self, widget, theme):
+        try:
+            if isinstance(widget, tk.Frame):
+                widget.configure(bg=theme["bg"])
+            elif isinstance(widget, tk.LabelFrame):
+                widget.configure(bg=theme["bg"], fg=theme["accent"])
+                for child in widget.winfo_children():
+                    self._apply_theme_to_widget(child, theme)
+            elif isinstance(widget, tk.Label):
+                important_colors = ["#e94560", "#ff9800", "#4caf50", "#ff6b6b", "#00bcd4", "#ffd700", "#4caf50"]
+                current_fg = widget.cget("fg")
+                if current_fg in important_colors:
+                    widget.configure(bg=theme["bg"])
+                else:
+                    widget.configure(bg=theme["bg"], fg=theme["fg"])
+            elif isinstance(widget, tk.Button):
+                widget.configure(bg=theme["secondary"], fg=theme["fg"], activebackground=theme["accent"], activeforeground="white")
+            elif isinstance(widget, tk.Entry):
+                widget.configure(bg=theme["input_bg"], fg=theme["fg"], insertbackground=theme["fg"])
+            elif isinstance(widget, scrolledtext.ScrolledText):
+                widget.configure(bg=theme["text_bg"], fg=theme["fg"], insertbackground=theme["fg"])
+                if hasattr(widget, 'vbar'):
+                    widget.vbar.configure(bg=theme["secondary"], troughcolor=theme["bg"])
+            elif isinstance(widget, tk.Listbox):
+                widget.configure(bg=theme["list_bg"], fg=theme["fg"], selectbackground=theme["accent"], selectforeground="white")
+            elif isinstance(widget, tk.Text):
+                widget.configure(bg=theme["text_bg"], fg=theme["fg"], insertbackground=theme["fg"])
+            elif isinstance(widget, ttk.Combobox):
+                style = ttk.Style()
+                style.configure("TCombobox", fieldbackground=theme["input_bg"], foreground=theme["fg"], background=theme["bg"])
+            elif isinstance(widget, ttk.Progressbar):
+                style = ttk.Style()
+                style.configure("TProgressbar", background=theme["accent"], troughcolor=theme["secondary"])
+            elif isinstance(widget, tk.Scrollbar):
+                widget.configure(bg=theme["secondary"], troughcolor=theme["bg"], activebackground=theme["accent"])
+            elif isinstance(widget, tk.Radiobutton):
+                widget.configure(bg=theme["bg"], fg=theme["fg"], selectcolor=theme["secondary"], activebackground=theme["bg"])
+            elif isinstance(widget, tk.Canvas):
+                widget.configure(bg=theme["bg"])
+
+            for child in widget.winfo_children():
+                self._apply_theme_to_widget(child, theme)
+        except Exception:
+            pass
+
+    def center_window(self):
+        self.root.update_idletasks()
+        width = 1300
+        height = 950
+        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.root.winfo_screenheight() // 2) - (height // 2)
+        self.root.geometry(f'{width}x{height}+{x}+{y}')
+
+    def setup_hotkeys(self):
+        self.root.bind('<Control-f>', lambda e: self.search_entry.focus())
+        self.root.bind('<F5>', lambda e: self.refresh_prices())
+        self.root.bind('<Return>', lambda e: self.search_game())
+
+    def load_cache(self):
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'rb') as f:
+                    cache = pickle.load(f)
+                    now = time.time()
+                    return {k: v for k, v in cache.items() if now - v.get('timestamp', 0) < 86400}
+            except:
+                return {}
+        return {}
+
+    def save_cache(self):
+        try:
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(self.price_cache, f)
+        except:
+            pass
+
+    def load_favorites(self):
+        if os.path.exists(self.favorites_file):
+            try:
+                with open(self.favorites_file, 'r', encoding='utf-8') as f:
+                    favorites = json.load(f)
+                    for fav in favorites:
+                        if 'price' not in fav:
+                            fav['price'] = None
+                    return favorites
+            except:
+                return []
+        return []
+
+    def save_favorites(self):
+        try:
+            with open(self.favorites_file, 'w', encoding='utf-8') as f:
+                json.dump(self.favorites, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+
+    def update_favorite_prices(self):
+        for fav in self.favorites:
+            price_info = self.get_real_price(fav['appid'])
+            if price_info:
+                if price_info.get('is_free'):
+                    fav['price'] = "БЕСПЛАТНО"
+                elif price_info.get('current_price'):
+                    if price_info.get('discount', 0) > 0:
+                        fav['price'] = f"{price_info['current_price']:.2f} RUB (-{price_info['discount']}%)"
+                    else:
+                        fav['price'] = f"{price_info['current_price']:.2f} RUB"
+            else:
+                fav['price'] = "Игра еще не вышла"
+        self.save_favorites()
+
+    def setup_ui(self):
+        main_container = tk.Frame(self.root, bg="#1a1a2e")
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        self.create_header(main_container)
+        self.create_search_panel(main_container)
+
+        self.progress_bar = ttk.Progressbar(main_container, mode='indeterminate', length=400)
+        self.progress_bar.pack(pady=5)
+        self.progress_bar.pack_forget()
+
+        self.status_var = tk.StringVar()
+        status_label = tk.Label(main_container, textvariable=self.status_var, font=("Arial", 9), bg="#1a1a2e", fg="#4caf50")
+        status_label.pack(pady=5)
+
+        ttk.Separator(main_container, orient='horizontal').pack(fill=tk.X, pady=10)
+
+        content_frame = tk.Frame(main_container, bg="#1a1a2e")
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.create_left_panel(content_frame)
+        self.create_right_panel(content_frame)
+
+        self.apply_theme()
+
+    def start_loading(self):
+        self.progress_bar.pack(pady=5)
+        self.progress_bar.start()
+
+    def stop_loading(self):
+        self.progress_bar.stop()
+        self.progress_bar.pack_forget()
+
+    def create_header(self, parent):
+        title_frame = tk.Frame(parent, bg="#1a1a2e")
+        title_frame.pack(fill=tk.X, pady=(0, 20))
+
+        title = tk.Label(title_frame, text="🎮 Steam Game Finder", font=("Arial", 28, "bold"), bg="#1a1a2e", fg="#e94560")
+        title.pack()
+
+        subtitle = tk.Label(title_frame, text="Реальный поиск игр через Steam API | Актуальные цены | История скидок", font=("Arial", 11), bg="#1a1a2e", fg="#ffffff")
+        subtitle.pack()
+
+    def create_search_panel(self, parent):
+        search_frame = tk.LabelFrame(parent, text="🔍 ПОИСК ИГР", font=("Arial", 12, "bold"), bg="#1a1a2e", fg="#e94560")
+        search_frame.pack(fill=tk.X, pady=(0, 15))
+
+        input_frame = tk.Frame(search_frame, bg="#1a1a2e")
+        input_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        tk.Label(input_frame, text="Название игры:", bg="#1a1a2e", fg="white", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.search_entry = tk.Entry(input_frame, font=("Arial", 12), bg="#0f3460", fg="white", insertbackground="white", relief=tk.FLAT, width=50)
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+
+        self.search_btn = tk.Button(input_frame, text="🔍 Искать", command=self.search_game, bg="#e94560", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 11, "bold"), padx=20)
+        self.search_btn.pack(side=tk.RIGHT)
+
+        filters_frame = tk.Frame(search_frame, bg="#1a1a2e")
+        filters_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        sort_frame = tk.Frame(filters_frame, bg="#1a1a2e")
+        sort_frame.pack(side=tk.LEFT, padx=(0, 20))
+
+        tk.Label(sort_frame, text="Сортировка:", bg="#1a1a2e", fg="#ff9800", font=("Arial", 9)).pack(side=tk.LEFT)
+
+        rel_rb = tk.Radiobutton(sort_frame, text="Релевантность", variable=self.sort_by, value="relevance", bg="#1a1a2e", fg="white", selectcolor="#1a1a2e", font=("Arial", 9), command=self.apply_sorting)
+        rel_rb.pack(side=tk.LEFT, padx=5)
+
+        price_desc_rb = tk.Radiobutton(sort_frame, text="Цена ↑", variable=self.sort_by, value="price_desc", bg="#1a1a2e", fg="white", selectcolor="#1a1a2e", font=("Arial", 9), command=self.apply_sorting)
+        price_desc_rb.pack(side=tk.LEFT, padx=5)
+
+        price_asc_rb = tk.Radiobutton(sort_frame, text="Цена ↓", variable=self.sort_by, value="price_asc", bg="#1a1a2e", fg="white", selectcolor="#1a1a2e", font=("Arial", 9), command=self.apply_sorting)
+        price_asc_rb.pack(side=tk.LEFT, padx=5)
+
+        disc_rb = tk.Radiobutton(sort_frame, text="Скидка", variable=self.sort_by, value="discount", bg="#1a1a2e", fg="white", selectcolor="#1a1a2e", font=("Arial", 9), command=self.apply_sorting)
+        disc_rb.pack(side=tk.LEFT, padx=5)
+
+        genre_frame = tk.Frame(filters_frame, bg="#1a1a2e")
+        genre_frame.pack(side=tk.LEFT)
+
+        tk.Label(genre_frame, text="Жанр:", bg="#1a1a2e", fg="#ff9800", font=("Arial", 9)).pack(side=tk.LEFT)
+
+        self.genre_combo = ttk.Combobox(genre_frame, textvariable=self.genre_filter_var, values=["Все жанры"], state="readonly", width=20)
+        self.genre_combo.pack(side=tk.LEFT, padx=5)
+        self.genre_combo.bind("<<ComboboxSelected>>", self.on_genre_filter)
+
+        reset_btn = tk.Button(genre_frame, text="🔄 Сбросить фильтры", command=self.reset_filters, bg="#ff6b6b", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 9))
+        reset_btn.pack(side=tk.LEFT, padx=10)
+
+        theme_frame = tk.Frame(filters_frame, bg="#1a1a2e")
+        theme_frame.pack(side=tk.RIGHT)
+
+        tk.Label(theme_frame, text="Тема:", bg="#1a1a2e", fg="#ff9800", font=("Arial", 9)).pack(side=tk.LEFT)
+
+        theme_descriptions = [self.themes[theme]["description"] for theme in self.themes.keys()]
+        theme_values = list(self.themes.keys())
+
+        self.theme_combo = ttk.Combobox(theme_frame, values=theme_descriptions, state="readonly", width=14)
+        current_index = theme_values.index(self.current_theme) if self.current_theme in theme_values else 0
+        self.theme_combo.set(theme_descriptions[current_index])
+        self.theme_combo.pack(side=tk.LEFT, padx=5)
+        self.theme_combo.bind("<<ComboboxSelected>>", self.on_theme_select)
+
+    def on_theme_select(self, event=None):
+        selected_description = self.theme_combo.get()
+        for theme_key, theme_data in self.themes.items():
+            if theme_data["description"] == selected_description:
+                self.apply_theme(theme_key)
+                break
+
+    def reset_filters(self):
+        self.genre_filter_var.set("Все жанры")
+        self.sort_by.set("relevance")
+        self.selected_genres.clear()
+        self.apply_filtering()
+
+    def on_genre_filter(self, event=None):
+        selected = self.genre_filter_var.get()
+        if selected == "Все жанры":
+            self.selected_genres.clear()
+        else:
+            self.selected_genres = {selected}
+        self.apply_filtering()
+
+    def apply_filtering(self):
+        if not self.original_results:
+            return
+
+        if self.selected_genres:
+            filtered = []
+            for game in self.original_results:
+                if game is None:
+                    continue
+                game_genres = game.get('genres', [])
+                if any(genre in self.selected_genres for genre in game_genres):
+                    filtered.append(game)
+        else:
+            filtered = self.original_results.copy()
+
+        self.filtered_results = filtered
+
+        sort_type = self.sort_by.get()
+        if sort_type != "relevance":
+            try:
+                if sort_type == "price_asc":
+                    filtered.sort(key=lambda x: x.get('price_info', {}).get('current_price', 999999)
+                    if x.get('price_info') and isinstance(x.get('price_info'), dict)
+                       and not x['price_info'].get('is_free') else 999999)
+                elif sort_type == "price_desc":
+                    filtered.sort(key=lambda x: x.get('price_info', {}).get('current_price', 0)
+                    if x.get('price_info') and isinstance(x.get('price_info'), dict)
+                       and not x['price_info'].get('is_free') else 0, reverse=True)
+                elif sort_type == "discount":
+                    filtered.sort(key=lambda x: x.get('price_info', {}).get('discount', 0)
+                    if x.get('price_info') and isinstance(x.get('price_info'), dict) else 0, reverse=True)
+            except Exception as e:
+                print(f"Sorting error: {e}")
+
+        self.display_real_results(filtered)
+
+    def apply_sorting(self):
+        if not self.original_results:
+            return
+
+        sort_type = self.sort_by.get()
+        results = self.original_results.copy()
+
+        if sort_type != "relevance":
+            try:
+                if sort_type == "price_asc":
+                    results.sort(key=lambda x: x.get('price_info', {}).get('current_price', 999999)
+                    if x.get('price_info') and isinstance(x.get('price_info'), dict)
+                       and not x['price_info'].get('is_free') else 999999)
+                elif sort_type == "price_desc":
+                    results.sort(key=lambda x: x.get('price_info', {}).get('current_price', 0)
+                    if x.get('price_info') and isinstance(x.get('price_info'), dict)
+                       and not x['price_info'].get('is_free') else 0, reverse=True)
+                elif sort_type == "discount":
+                    results.sort(key=lambda x: x.get('price_info', {}).get('discount', 0)
+                    if x.get('price_info') and isinstance(x.get('price_info'), dict) else 0, reverse=True)
+            except Exception as e:
+                print(f"Sorting error: {e}")
+
+        self.filtered_results = results
+        self.display_real_results(results)
+
+    def create_left_panel(self, parent):
+        left_panel = tk.Frame(parent, bg="#1a1a2e", width=450)
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 15))
+        left_panel.pack_propagate(False)
+
+        tk.Label(left_panel, text="📋 РЕЗУЛЬТАТЫ ПОИСКА", font=("Arial", 11, "bold"), bg="#1a1a2e", fg="#ffffff").pack(anchor=tk.W, pady=(0, 5))
+
+        list_container = tk.Frame(left_panel, bg="#1a1a2e")
+        list_container.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar = tk.Scrollbar(list_container)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.results_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, font=("Arial", 10), bg="#0f3460", fg="white", selectbackground="#e94560", selectforeground="white", relief=tk.FLAT, height=14)
+        self.results_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.results_listbox.yview)
+        self.results_listbox.bind("<Double-Button-1>", lambda e: self.open_selected_game())
+        self.results_listbox.bind("<<ListboxSelect>>", self.on_game_select)
+
+        action_frame = tk.Frame(left_panel, bg="#1a1a2e")
+        action_frame.pack(fill=tk.X, pady=10)
+
+        self.open_btn = tk.Button(action_frame, text="🌐 Открыть в Steam", command=self.open_selected_game, bg="#4caf50", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 9, "bold"), state=tk.DISABLED)
+        self.open_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+
+        self.steamdb_btn = tk.Button(action_frame, text="📊 SteamDB", command=self.open_steamdb, bg="#2196f3", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 9, "bold"), state=tk.DISABLED)
+        self.steamdb_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+
+        self.fav_btn = tk.Button(action_frame, text="⭐ В избранное", command=self.add_to_favorites, bg="#9c27b0", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 9, "bold"), state=tk.DISABLED)
+        self.fav_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+
+    def create_right_panel(self, parent):
+        right_panel = tk.Frame(parent, bg="#1a1a2e")
+        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        tabs_frame = tk.Frame(right_panel, bg="#1a1a2e")
+        tabs_frame.pack(fill=tk.X, pady=(0, 10))
+
+        tabs = [("📄 Информация", "info", "#e94560"), ("📈 История цен", "history", "#2196f3"), ("⚙️ Характеристики", "specs", "#4caf50"), ("⭐ Избранное", "favorites", "#9c27b0")]
+
+        self.tab_buttons = {}
+        for text, tab_id, color in tabs:
+            btn = tk.Button(tabs_frame, text=text, command=lambda t=tab_id: self.show_tab(t), bg="#0f3460" if tab_id != "info" else "#e94560", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 10, "bold"), padx=20, pady=5)
+            btn.pack(side=tk.LEFT, padx=(0, 10))
+            self.tab_buttons[tab_id] = btn
+
+        self.info_text = scrolledtext.ScrolledText(right_panel, font=("Consolas", 10), bg="#0f3460", fg="white", relief=tk.FLAT, wrap=tk.WORD, height=22)
+        self.info_text.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        self.setup_text_tags()
+        self.show_welcome_message()
+
+    def setup_text_tags(self):
+        tags = {"title": ("#e94560", ("Arial", 13, "bold")), "price": ("#ff9800", None), "warning": ("#ff6b6b", None), "good": ("#4caf50", ("Arial", 10, "bold")), "demo": ("#ff9800", ("Arial", 9, "italic")), "recommendation": ("#00bcd4", ("Arial", 10, "bold")), "separator": ("#e94560", None), "specs_title": ("#4caf50", ("Arial", 10, "bold")), "discount": ("#4caf50", None), "specs_value": ("#ffffff", ("Consolas", 10)), "specs_field": ("#00bcd4", ("Arial", 9, "bold"))}
+        for tag, (color, font) in tags.items():
+            if font:
+                self.info_text.tag_config(tag, foreground=color, font=font)
+            else:
+                self.info_text.tag_config(tag, foreground=color)
+
+    def show_welcome_message(self):
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, "🎮 Steam Game Finder\n\n", "title")
+        self.info_text.insert(tk.END, "─" * 60 + "\n\n", "separator")
+        self.info_text.insert(tk.END, "🔍 РЕАЛЬНЫЙ ПОИСК ЧЕРЕЗ STEAM API\n\n", "good")
+        self.info_text.insert(tk.END, "• Введите название любой игры\n", "price")
+        self.info_text.insert(tk.END, "• Нажмите 'Искать' или Enter\n", "price")
+        self.info_text.insert(tk.END, "• Выберите игру для просмотра информации\n", "price")
+        self.info_text.insert(tk.END, "• Дважды кликните для открытия в Steam\n", "price")
+        self.info_text.insert(tk.END, "• Нажмите ⭐ В избранное для сохранения игр\n\n", "price")
+        self.info_text.insert(tk.END, "─" * 60 + "\n", "separator")
+        self.info_text.insert(tk.END, "\n💡 ПРИМЕРЫ ЗАПРОСОВ:\n", "recommendation")
+        self.info_text.insert(tk.END, "Portal, Dota 2, Terraria, Cuphead, Half-Life 2\n", "demo")
+
+    def show_tab(self, tab_id):
+        self.current_tab = tab_id
+        for tid, btn in self.tab_buttons.items():
+            if tid == tab_id:
+                btn.config(bg="#e94560")
+            else:
+                btn.config(bg="#0f3460")
+
+        if tab_id == "info":
+            self.display_game_info()
+        elif tab_id == "history":
+            self.display_price_history()
+        elif tab_id == "specs":
+            self.display_specifications()
+        elif tab_id == "favorites":
+            self.display_favorites()
+
+    def display_favorites(self):
+        if not self.favorites:
+            messagebox.showinfo("Избранное", "У вас пока нет избранных игр.\n\nДобавьте игру через кнопку '⭐ В избранное'")
+            return
+
+        self.update_favorite_prices()
+
+        fav_window = tk.Toplevel(self.root)
+        fav_window.title("⭐ Избранные игры")
+        fav_window.geometry("700x500")
+        fav_window.configure(bg="#1a1a2e")
+        fav_window.transient(self.root)
+
+        tk.Label(fav_window, text="⭐ ИЗБРАННЫЕ ИГРЫ", font=("Arial", 16, "bold"), bg="#1a1a2e", fg="#e94560").pack(pady=15)
+        tk.Label(fav_window, text="Здесь хранятся игры, которые вы добавили в избранное", font=("Arial", 10), bg="#1a1a2e", fg="#ff9800").pack(pady=(0, 15))
+
+        list_frame = tk.Frame(fav_window, bg="#1a1a2e")
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        fav_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=("Arial", 11), bg="#0f3460", fg="white", selectbackground="#e94560", selectforeground="white", relief=tk.FLAT, height=15)
+        fav_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=fav_listbox.yview)
+
+        for game in self.favorites:
+            price_text = game.get('price', 'Цена неизвестна')
+            added_date = game.get('added_date', 'Неизвестно')[:10]
+            fav_listbox.insert(tk.END, f"🎮 {game['name']} — {price_text} | Добавлена: {added_date}")
+
+            if 'БЕСПЛАТНО' in price_text:
+                fav_listbox.itemconfig(tk.END, fg="#ffd700")
+            elif 'RUB' in price_text and '-' in price_text:
+                fav_listbox.itemconfig(tk.END, fg="#4caf50")
+            elif 'RUB' in price_text:
+                fav_listbox.itemconfig(tk.END, fg="#ff9800")
+            elif 'Неизвестна' in price_text or 'TBA' in price_text or 'не вышла' in price_text:
+                fav_listbox.itemconfig(tk.END, fg="#888888")
+
+        btn_frame = tk.Frame(fav_window, bg="#1a1a2e")
+        btn_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        def open_selected_fav():
+            selection = fav_listbox.curselection()
+            if selection:
+                game = self.favorites[selection[0]]
+                webbrowser.open(game['url'])
+                self.status_var.set(f"🌐 Открыта страница: {game['name']}")
+
+        def remove_selected_fav():
+            selection = fav_listbox.curselection()
+            if selection:
+                game = self.favorites[selection[0]]
+                if messagebox.askyesno("Подтверждение", f"Удалить игру '{game['name']}' из избранного?"):
+                    del self.favorites[selection[0]]
+                    self.save_favorites()
+                    fav_listbox.delete(selection[0])
+                    messagebox.showinfo("Успех", f"Игра '{game['name']}' удалена из избранного")
+
+        def refresh_prices_fav():
+            self.update_favorite_prices()
+            fav_window.destroy()
+            self.display_favorites()
+            messagebox.showinfo("Обновлено", "Цены в избранном обновлены")
+
+        open_btn = tk.Button(btn_frame, text="🌐 Открыть в Steam", command=open_selected_fav, bg="#4caf50", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 10, "bold"), padx=15, pady=5)
+        open_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+
+        delete_btn = tk.Button(btn_frame, text="🗑️ Удалить", command=remove_selected_fav, bg="#ff6b6b", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 10, "bold"), padx=15, pady=5)
+        delete_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+
+        refresh_btn = tk.Button(btn_frame, text="🔄 Обновить цены", command=refresh_prices_fav, bg="#2196f3", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 10, "bold"), padx=15, pady=5)
+        refresh_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+
+        close_btn = tk.Button(btn_frame, text="✖️ Закрыть", command=fav_window.destroy, bg="#9c27b0", fg="white", relief=tk.FLAT, cursor="hand2", font=("Arial", 10, "bold"), padx=15, pady=5)
+        close_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+
+    def search_game(self):
+        query = self.search_entry.get().strip()
+        if not query:
+            messagebox.showwarning("Внимание", "Введите название игры!")
+            return
+
+        self.results_listbox.delete(0, tk.END)
+        self.current_results = []
+        self.original_results = []
+        self.filtered_results = []
+        self.open_btn.config(state=tk.DISABLED)
+        self.steamdb_btn.config(state=tk.DISABLED)
+        self.fav_btn.config(state=tk.DISABLED)
+        self.selected_appid = None
+        self.status_var.set(f"🔍 Поиск: {query} через Steam API...")
+
+        self.start_loading()
+        threading.Thread(target=self.perform_real_search, args=(query,), daemon=True).start()
+
+    def perform_real_search(self, query):
+        try:
+            url = "https://store.steampowered.com/search/suggest"
+            params = {"term": query, "f": "games", "cc": "RU", "l": "russian"}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            results = []
+
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    if "items" in data:
+                        for item in data["items"]:
+                            if "name" in item and "id" in item:
+                                results.append({
+                                    "name": item["name"],
+                                    "appid": str(item["id"]),
+                                    "url": f"https://store.steampowered.com/app/{item['id']}/",
+                                    "genres": []
+                                })
+                except:
+                    pass
+
+            if len(results) == 0:
+                results = self.search_via_steam_search(query)
+
+            if len(results) == 0:
+                results = self.search_in_popular_games(query)
+
+            if results:
+                available_genres = set()
+                for game in results:
+                    price_info = self.get_real_price(game['appid'])
+                    game['price_info'] = price_info
+
+                    genres = self.get_game_genres(game['appid'])
+                    game['genres'] = genres
+                    for genre in genres:
+                        available_genres.add(genre)
+
+                self.root.after(0, self.update_genre_list, available_genres)
+                self.original_results = results.copy()
+                self.filtered_results = results.copy()
+                self.root.after(0, self.apply_sorting)
+            else:
+                self.root.after(0, self.no_results)
+
+        except Exception as e:
+            print(f"Search error: {e}")
+            self.root.after(0, self.search_error, str(e))
+        finally:
+            self.root.after(0, self.stop_loading)
+
+    def get_game_genres(self, appid):
+        try:
+            url = "https://store.steampowered.com/api/appdetails"
+            params = {"appids": appid, "cc": "ru", "l": "russian"}
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, params=params, headers=headers, timeout=5)
+            data = response.json()
+            if data and str(appid) in data and data[str(appid)].get("success"):
+                game_data = data[str(appid)]["data"]
+                genres = []
+                if "genres" in game_data:
+                    for genre in game_data["genres"]:
+                        genres.append(genre.get("description", ""))
+                return genres
+        except:
+            pass
+        return []
+
+    def update_genre_list(self, genres):
+        genre_list = ["Все жанры"] + sorted(list(genres))
+        self.genre_combo['values'] = genre_list
+
+    def search_via_steam_search(self, query):
+        results = []
+        try:
+            url = "https://store.steampowered.com/search/"
+            params = {"term": query, "category1": "998", "ignore_preferences": "1"}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                pattern = r'href="(https://store\.steampowered\.com/app/(\d+)/[^"]+)"'
+                matches = re.findall(pattern, response.text)
+                seen = set()
+                for full_url, appid in matches[:30]:
+                    if appid not in seen:
+                        seen.add(appid)
+                        name = self.get_game_name_by_id(appid)
+                        if name:
+                            results.append({
+                                "name": name,
+                                "appid": appid,
+                                "url": full_url.split('?')[0],
+                                "genres": []
+                            })
+        except:
+            pass
+        return results
+
+    def search_in_popular_games(self, query):
+        popular_games = [
+            {"name": "Portal", "appid": "400"},
+            {"name": "Portal 2", "appid": "620"},
+            {"name": "Counter-Strike 2", "appid": "730"},
+            {"name": "Dota 2", "appid": "570"},
+            {"name": "Half-Life 2", "appid": "220"},
+            {"name": "Left 4 Dead 2", "appid": "550"},
+            {"name": "Terraria", "appid": "105600"},
+        ]
+        results = []
+        query_lower = query.lower()
+        for game in popular_games:
+            if query_lower in game['name'].lower():
+                results.append({
+                    "name": game['name'],
+                    "appid": game['appid'],
+                    "url": f"https://store.steampowered.com/app/{game['appid']}/",
+                    "genres": []
+                })
+        return results
+
+    def get_game_name_by_id(self, appid):
+        try:
+            url = "https://store.steampowered.com/api/appdetails"
+            params = {"appids": appid, "cc": "ru", "l": "russian"}
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, params=params, headers=headers, timeout=5)
+            data = response.json()
+            if data and str(appid) in data and data[str(appid)].get("success"):
+                return data[str(appid)]["data"].get("name")
+        except:
+            pass
+        return None
+
+    def get_real_price(self, appid):
+        if appid in self.price_cache:
+            cache_data = self.price_cache[appid]
+            if time.time() - cache_data.get('timestamp', 0) < 3600:
+                return cache_data
+
+        try:
+            url = "https://store.steampowered.com/api/appdetails"
+            params = {"appids": appid, "cc": "ru"}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            data = response.json()
+
+            if data and str(appid) in data and data[str(appid)].get("success"):
+                game_data = data[str(appid)]["data"]
+                price_data = game_data.get("price_overview")
+                result = {}
+
+                if price_data:
+                    current_price = price_data.get("final", 0) / 100
+                    original_price = price_data.get("initial", 0) / 100
+                    discount = price_data.get("discount_percent", 0)
+                    result = {
+                        "current_price": current_price,
+                        "original_price": original_price,
+                        "discount": discount,
+                        "currency": price_data.get("currency", "RUB"),
+                        "timestamp": time.time()
+                    }
+                elif game_data.get("is_free"):
+                    result = {"is_free": True, "timestamp": time.time()}
+                else:
+                    result = None
+
+                if result:
+                    self.price_cache[appid] = result
+                    self.save_cache()
+                return result
+        except Exception as e:
+            print(f"Price error for {appid}: {e}")
+        return None
+
+    def display_real_results(self, results):
+        self.current_results = results
+        self.results_listbox.delete(0, tk.END)
+
+        for game in results:
+            if game is None:
+                continue
+            price_info = game.get('price_info')
+            if price_info and isinstance(price_info, dict):
+                if price_info.get('is_free'):
+                    display_text = f"🎮 {game['name']} — БЕСПЛАТНО!"
+                    self.results_listbox.insert(tk.END, display_text)
+                    self.results_listbox.itemconfig(tk.END, fg="#ffd700")
+                elif price_info.get('current_price'):
+                    if price_info.get('discount', 0) > 0:
+                        display_text = f"🎮 {game['name']} — {price_info['current_price']:.2f} RUB (-{price_info['discount']}%)"
+                        self.results_listbox.insert(tk.END, display_text)
+                        self.results_listbox.itemconfig(tk.END, fg="#4caf50")
+                    else:
+                        display_text = f"🎮 {game['name']} — {price_info['current_price']:.2f} RUB"
+                        self.results_listbox.insert(tk.END, display_text)
+                        self.results_listbox.itemconfig(tk.END, fg="#ff9800")
+            else:
+                display_text = f"🎮 {game['name']} — Игра еще не вышла"
+                self.results_listbox.insert(tk.END, display_text)
+                self.results_listbox.itemconfig(tk.END, fg="white")
+
+        filter_info = ""
+        if self.selected_genres:
+            filter_info = f" (фильтр: {', '.join(self.selected_genres)})"
+        self.status_var.set(f"✅ Найдено {len(results)} игр{filter_info}! Выберите игру для просмотра.")
+
+    def get_full_game_data(self, appid):
+        try:
+            url = "https://store.steampowered.com/api/appdetails"
+            params = {"appids": appid, "cc": "ru", "l": "russian"}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            data = response.json()
+
+            if data and str(appid) in data and data[str(appid)].get("success"):
+                game_data = data[str(appid)]["data"]
+
+                genres = []
+                if "genres" in game_data:
+                    for genre in game_data["genres"]:
+                        genres.append(genre.get("description", ""))
+
+                pc_requirements = game_data.get("pc_requirements", {})
+                if isinstance(pc_requirements, dict):
+                    min_req = self.clean_requirements(pc_requirements.get("minimum", ""))
+                    rec_req = self.clean_requirements(pc_requirements.get("recommended", ""))
+                else:
+                    min_req = self.clean_requirements(str(pc_requirements)) if pc_requirements else ""
+                    rec_req = ""
+
+                release_date_data = game_data.get("release_date", {})
+                release_date = release_date_data.get("date", "Неизвестно")
+
+                return {
+                    "name": game_data.get("name", ""),
+                    "has_demo": game_data.get("has_demo", False),
+                    "genres": genres,
+                    "developer": "Неизвестно",
+                    "publisher": "Неизвестно",
+                    "platforms": game_data.get("platforms", {}),
+                    "minimum_requirements": min_req,
+                    "recommended_requirements": rec_req,
+                    "languages": game_data.get("supported_languages", "Не указано"),
+                    "release_date": release_date,
+                }
+        except Exception as e:
+            print(f"Error getting game data: {e}")
+        return None
+
+    def clean_requirements(self, req_text):
+        if not req_text or len(req_text) < 5:
+            return ""
+        req_text = re.sub(r'<[^>]+>', ' ', req_text)
+        req_text = re.sub(r'&nbsp;', ' ', req_text)
+        req_text = re.sub(r'&lt;', '<', req_text)
+        req_text = re.sub(r'&gt;', '>', req_text)
+        req_text = re.sub(r'&amp;', '&', req_text)
+        req_text = re.sub(r'\*', '', req_text)
+        req_text = re.sub(r'\s+', ' ', req_text)
+        return req_text[:500].strip()
+
+    def get_price_history_demo(self, current_price):
+        sales = []
+        if current_price and current_price > 0:
+            base_price = current_price
+        else:
+            base_price = 1000
+
+        typical_sales = [
+            ("Летняя распродажа", 70, 6),
+            ("Зимняя распродажа", 75, 12),
+            ("Осенняя распродажа", 60, 11),
+            ("Весенняя распродажа", 55, 4),
+        ]
+
+        for name, discount, month in typical_sales:
+            price = base_price * (1 - discount / 100)
+            sales.append({"name": name, "discount": discount, "price": price, "month": month})
+        return sorted(sales, key=lambda x: x['month'], reverse=True)
+
+    def on_game_select(self, event):
+        selection = self.results_listbox.curselection()
+        if selection and selection[0] < len(self.current_results):
+            self.open_btn.config(state=tk.NORMAL)
+            self.steamdb_btn.config(state=tk.NORMAL)
+            self.fav_btn.config(state=tk.NORMAL)
+
+            game = self.current_results[selection[0]]
+            if game is None:
+                return
+            self.selected_appid = game['appid']
+            self.current_game_name = game['name']
+
+            self.status_var.set(f"📊 Загрузка данных об игре {game['name']}...")
+            self.start_loading()
+            threading.Thread(target=self.load_game_data, args=(game['appid'], game['name']), daemon=True).start()
+
+    def load_game_data(self, appid, game_name):
+        full_info = self.get_full_game_data(appid)
+
+        price_info = self.get_real_price(appid)
+        current_price = None
+        current_discount = 0
+        if price_info:
+            if not price_info.get('is_free'):
+                current_price = price_info.get('current_price')
+                current_discount = price_info.get('discount', 0)
+
+        price_history = {
+            "sales_list": self.get_price_history_demo(current_price),
+            "current_discount": current_discount,
+            "current_price": current_price
+        }
+
+        self.current_full_info = full_info
+        self.current_price_history = price_history
+        self.current_game_name = game_name
+
+        self.root.after(0, self.update_current_tab)
+        self.root.after(0, lambda: self.status_var.set(f"✅ Данные загружены: {game_name}"))
+        self.root.after(0, self.stop_loading)
+
+    def update_current_tab(self):
+        if self.current_tab == "favorites":
+            return
+        elif self.current_tab == "info":
+            self.display_game_info()
+        elif self.current_tab == "history":
+            self.display_price_history()
+        elif self.current_tab == "specs":
+            self.display_specifications()
+
+    def display_game_info(self):
+        self.info_text.delete(1.0, tk.END)
+
+        if not self.current_game_name:
+            self.info_text.insert(tk.END, "Выберите игру из списка слева", "warning")
+            return
+
+        self.info_text.insert(tk.END, f"{self.current_game_name}\n", "title")
+        self.info_text.insert(tk.END, "─" * 60 + "\n\n", "separator")
+
+        if self.current_full_info:
+            info = self.current_full_info
+
+            self.info_text.insert(tk.END, f"📅 Дата релиза: {info.get('release_date', 'Неизвестно')}\n", "price")
+
+            genres = info.get('genres', [])
+            if genres:
+                self.info_text.insert(tk.END, f"🎭 Жанры: {', '.join(genres)}\n", "specs_value")
+
+            if info.get('has_demo'):
+                self.info_text.insert(tk.END, f"\n🎮 ДЕМОВЕРСИЯ ДОСТУПНА!\n", "good")
+
+            price_info = self.get_real_price(self.selected_appid)
+            if price_info:
+                if price_info.get('is_free'):
+                    self.info_text.insert(tk.END, f"\n💰 Цена: БЕСПЛАТНО!\n", "good")
+                elif price_info.get('current_price'):
+                    if price_info.get('discount', 0) > 0:
+                        self.info_text.insert(tk.END, f"\n💰 Цена: {price_info['current_price']:.2f} RUB (скидка {price_info['discount']}%)\n", "discount")
+                        self.info_text.insert(tk.END, f"   Обычная цена: {price_info.get('original_price', 0):.2f} RUB\n", "price")
+                    else:
+                        self.info_text.insert(tk.END, f"\n💰 Цена: {price_info['current_price']:.2f} RUB\n", "price")
+            else:
+                self.info_text.insert(tk.END, f"\n💰 Игра еще не вышла\n", "price")
+        else:
+            self.info_text.insert(tk.END, f"\n💰 Информация об игре временно недоступна\n", "warning")
+
+        self.info_text.insert(tk.END, "\n" + "─" * 60 + "\n", "separator")
+        self.info_text.insert(tk.END, "💡 Дважды кликните по игре для открытия в Steam\n", "price")
+
+    def display_price_history(self):
+        self.info_text.delete(1.0, tk.END)
+
+        if not self.current_game_name:
+            self.info_text.insert(tk.END, "Выберите игру для просмотра истории цен", "warning")
+            return
+
+        self.info_text.insert(tk.END, f"📈 История цен: {self.current_game_name}\n", "title")
+        self.info_text.insert(tk.END, "─" * 60 + "\n\n", "separator")
+
+        if self.current_price_history and self.current_price_history.get('sales_list'):
+            self.info_text.insert(tk.END, "📊 ПРИМЕРНЫЕ СКИДКИ НА STEAM:\n\n", "recommendation")
+            for sale in self.current_price_history['sales_list'][:6]:
+                self.info_text.insert(tk.END, f"   • {sale['name']}\n", "discount")
+                self.info_text.insert(tk.END, f"     Скидка: {sale['discount']}% → {sale['price']:.2f} RUB\n\n", "price")
+
+            if self.current_price_history.get('current_discount', 0) > 0:
+                self.info_text.insert(tk.END, "─" * 60 + "\n", "separator")
+                self.info_text.insert(tk.END, f"🎉 СЕЙЧАС СКИДКА {self.current_price_history['current_discount']}%!\n", "good")
+        else:
+            self.info_text.insert(tk.END, "📉 Нет данных о прошлых скидках\n", "warning")
+
+    def display_specifications(self):
+        self.info_text.delete(1.0, tk.END)
+
+        if not self.current_game_name:
+            self.info_text.insert(tk.END, "Выберите игру для просмотра характеристик", "warning")
+            return
+
+        self.info_text.insert(tk.END, f"⚙️ Системные требования: {self.current_game_name}\n", "title")
+        self.info_text.insert(tk.END, "─" * 60 + "\n\n", "separator")
+
+        if self.current_full_info:
+            info = self.current_full_info
+
+            min_req = info.get('minimum_requirements', '')
+            if min_req and len(min_req) > 5:
+                self.info_text.insert(tk.END, "Минимальные:\n", "specs_title")
+                lines = min_req.split('\n')
+                seen_fields = set()
+                unique_lines = []
+                for line in lines:
+                    if line.strip():
+                        field = line.split(':', 1)[0].strip() if ':' in line else line
+                        if field not in seen_fields:
+                            seen_fields.add(field)
+                            unique_lines.append(line)
+
+                for line in unique_lines:
+                    if line.strip():
+                        if ':' in line:
+                            parts = line.split(':', 1)
+                            field = parts[0].strip()
+                            value = parts[1].strip()
+                            self.info_text.insert(tk.END, f"{field}: {value}\n")
+                        else:
+                            self.info_text.insert(tk.END, f"{line}\n")
+                self.info_text.insert(tk.END, "\n")
+            else:
+                self.info_text.insert(tk.END, "Минимальные:\n", "specs_title")
+                self.info_text.insert(tk.END, "   Не указаны\n\n")
+
+            rec_req = info.get('recommended_requirements', '')
+            if rec_req and len(rec_req) > 5:
+                self.info_text.insert(tk.END, "Рекомендованные:\n", "specs_title")
+                lines = rec_req.split('\n')
+                seen_fields = set()
+                unique_lines = []
+                for line in lines:
+                    if line.strip():
+                        field = line.split(':', 1)[0].strip() if ':' in line else line
+                        if field not in seen_fields:
+                            seen_fields.add(field)
+                            unique_lines.append(line)
+
+                for line in unique_lines:
+                    if line.strip():
+                        if ':' in line:
+                            parts = line.split(':', 1)
+                            field = parts[0].strip()
+                            value = parts[1].strip()
+                            self.info_text.insert(tk.END, f"{field}: {value}\n")
+                        else:
+                            self.info_text.insert(tk.END, f"{line}\n")
+                self.info_text.insert(tk.END, "\n")
+            else:
+                self.info_text.insert(tk.END, "Рекомендованные:\n", "specs_title")
+                self.info_text.insert(tk.END, "   Не указаны\n\n")
+        else:
+            self.info_text.insert(tk.END, "Характеристики игры недоступны", "warning")
+
+    def add_to_favorites(self):
+        selection = self.results_listbox.curselection()
+        if not selection or selection[0] >= len(self.current_results):
+            messagebox.showwarning("Внимание", "Выберите игру из списка")
+            return
+
+        game = self.current_results[selection[0]]
+        if game is None:
+            return
+
+        for fav in self.favorites:
+            if fav['appid'] == game['appid']:
+                messagebox.showinfo("Информация", f"Игра '{game['name']}' уже в избранном")
+                return
+
+        price_info = self.get_real_price(game['appid'])
+        price_text = None
+        if price_info:
+            if price_info.get('is_free'):
+                price_text = "БЕСПЛАТНО"
+            elif price_info.get('current_price'):
+                if price_info.get('discount', 0) > 0:
+                    price_text = f"{price_info['current_price']:.2f} RUB (-{price_info['discount']}%)"
+                else:
+                    price_text = f"{price_info['current_price']:.2f} RUB"
+
+        self.favorites.append({
+            'name': game['name'],
+            'appid': game['appid'],
+            'url': game['url'],
+            'price': price_text,
+            'added_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'note': ""
+        })
+        self.save_favorites()
+        messagebox.showinfo("Успех", f"Игра '{game['name']}' добавлена в избранное!")
+
+    def open_selected_game(self):
+        selection = self.results_listbox.curselection()
+        if selection and selection[0] < len(self.current_results):
+            game = self.current_results[selection[0]]
+            if game:
+                webbrowser.open(game['url'])
+                self.status_var.set(f"🌐 Открыта страница: {game['name']}")
+
+    def open_steamdb(self):
+        if self.selected_appid:
+            webbrowser.open(f"https://steamdb.info/app/{self.selected_appid}/")
+            self.status_var.set(f"🌐 Открыт SteamDB для ID: {self.selected_appid}")
+
+    def refresh_prices(self):
+        if self.selected_appid:
+            if self.selected_appid in self.price_cache:
+                del self.price_cache[self.selected_appid]
+            self.get_real_price(self.selected_appid)
+            self.load_game_data(self.selected_appid, self.current_game_name)
+            self.status_var.set("🔄 Цены обновлены")
+
+    def no_results(self):
+        self.status_var.set("❌ Игры не найдены. Попробуйте другое название.")
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, "❌ ИГРЫ НЕ НАЙДЕНЫ\n\n", "warning")
+        self.info_text.insert(tk.END, "Попробуйте:\n\n", "recommendation")
+        self.info_text.insert(tk.END, "• Ввести название на английском\n", "price")
+        self.info_text.insert(tk.END, "• Проверить правильность написания\n", "price")
+        self.info_text.insert(tk.END, "• Попробовать более короткий запрос\n\n", "price")
+        self.info_text.insert(tk.END, "💡 Примеры: Portal, Dota 2, counter strike, Half-Life 2\n", "demo")
+
+    def search_error(self, error_msg):
+        self.status_var.set(f"❌ Ошибка: {error_msg}")
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, "❌ ОШИБКА ПОИСКА\n\n", "warning")
+        self.info_text.insert(tk.END, f"{error_msg}\n\n", "price")
+        self.info_text.insert(tk.END, "Проверьте подключение к интернету и попробуйте снова.", "demo")
+
+
+def main():
+    root = tk.Tk()
+    app = SteamGameFinder(root)
+
+    def on_closing():
+        app.save_cache()
+        app.save_favorites()
+        app.save_settings()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
